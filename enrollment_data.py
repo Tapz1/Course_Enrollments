@@ -1,6 +1,5 @@
 """
 Programmer = Chris Tapia
-Last Modified = 07/03/2019
 Description = Enrollment data from csv files
 """
 
