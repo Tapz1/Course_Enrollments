@@ -12,7 +12,8 @@ from datetime import datetime, timedelta
 import glob
 from string import ascii_uppercase
 from matplotlib import pyplot as plt
-#import seaborn as snsnb
+
+from send_email import send_email
 
 
 # method for finding the last updated file
@@ -38,22 +39,8 @@ src_folder = (drive_location() + "SXrrmcpFiles\\SXrrmcpFiles\\")
 #src_folder = "C:\\Users\\chris\\Downloads\\SXrrmcpFiles\\"
 
 
-def percentage_increase(src_folder, filename, subject, days_back):
-    cols = ["ACTL"]
-    # an older file
-    prev_df = pd.read_csv(src_folder + filename)
-    prev_data = prev_df.loc[prev_df.SUBJ == subject, cols].sum()
-
-    # the latest file
-    new_df = pd.read_csv(latest_file(src_folder))
-    new_data = new_df.loc[new_df.SUBJ == subject, cols].sum()
-    print("Here is the total percentage increase/decrease of enrollment from the two files:")
-    increase = new_data - prev_data
-    return round(((increase / prev_data) * 100),2)
-
-
 # this grabs the data of a chosen course (graph and csv)
-def course_data_comparison(path, semester, course_name, days_back):
+def course_data_comparison(path, semester, course_name, days_back, recipients):
     # glob is perfect for getting all files of the same file type
     current_date = datetime.now()
 
@@ -100,12 +87,21 @@ def course_data_comparison(path, semester, course_name, days_back):
     concatDF.columns=cols
     concatDF.to_csv("%s %s Enrollment Data - %s day comparison.csv" % (semester, course_name, str(days_back)), index=None)
 
-    graph(concatDF, semester, course_name, days_back)
+    graph_name = ("%s %s Enrollment Data - %s day comparison.pdf" % (semester, course_name, str(days_back)))
+    # the graph
+    graph(concatDF, semester, course_name, days_back, graph_name)
 
+    new_file_name = ("%s %s Enrollment Data - %s day comparison.csv" % (semester, course_name, str(days_back)))
+
+    # the new CSV file and the graph
+    files_to_send = [new_file_name, graph_name]
+
+    # params: subject, body, filename, recipients
+    send_email(("%s %s Enrollment Data" % (semester, course_name)), statistics(all_csv_files, course_name, concatDF, days_back), files_to_send, recipients.split(','))
 
 # this creates a bar graph displaying the data of a chosen subject
 # takes 4 parameters: source folder address, subject, and the name of the file
-def subject_data_comparison(path, semester, subject, days_back):
+def subject_data_comparison(path, semester, subject, days_back, recipients):
     current_date = datetime.now()
 
     all_csv_files = glob.glob(path + "*%s.csv" % semester)
@@ -152,28 +148,75 @@ def subject_data_comparison(path, semester, subject, days_back):
     concatDF.columns=cols
     concatDF.to_csv("%s %s Enrollment Data - %s day comparison.csv" % (semester, subject, str(days_back)), index=None)
 
-    graph(concatDF, semester, subject, days_back)
+    graph_name = ("%s %s Enrollment Data - %s day comparison.pdf" % (semester, subject, str(days_back)))
+
+    graph(concatDF, semester, subject, days_back, graph_name)
+
+    new_file_name = ("%s %s Enrollment Data - %s day comparison.csv" % (semester, subject, str(days_back)))
+
+    # the new CSV file and the graph
+    files_to_send = [new_file_name, graph_name]
+
+    # sends email - params: subject, body, filename, recipients
+    send_email(("%s %s Enrollment Data" % (semester, subject)), statistics(concatDF), files_to_send, recipients.split(','))
 
 
 # graph configuration
-def graph(data, semester, name, days_back):
+def graph(data, semester, name, days_back, graph_name):
     colors = ['b', 'r'] # colors for the graph
+    groups = data.groupby(['TITLE', 'DATE'])['ACTL'].sum()  # groups the data
+
+    groups.plot.barh(x='TITLE', y='ACTL', title='%s Course Enrollments for %s in a %s day period' % (semester, name, days_back), legend=True, color=colors, figsize=(14, 5))    #figsize is the size of the window
+    plt.tight_layout()  # this keeps all of the data within the size of the window
+    plt.savefig(graph_name)
+    plt.show()  # required to display pop up of graph
+
+
+# uses numpy to generate responses of the data
+def statistics(data_list, course_name, data, days_back):
+    cols = ["ACTL"]
+    # an older file
+    oldest_df = pd.read_csv(data_list[-days_back])
+    # drops duplicate data, identified by its CRN
+    oldest_df.drop_duplicates(subset = 'CRN', keep='first', inplace=True)
+    oldest_data = oldest_df.loc[oldest_df.TITLE == course_name, cols].sum()
+
+    # the latest file
+    new_df = pd.read_csv(data_list[-1])
+    new_df.drop_duplicates(subset = 'CRN', keep='first', inplace=True)
+    new_data = new_df.loc[new_df.TITLE == course_name, cols].sum()
+
+    data_change = new_data - oldest_data
+    percentage = round(((data_change / oldest_data) * 100),2)
+    percent_detail = "The total percentage change (increase/decrease) of enrollment from this data is: %s percent \n" % str(percentage)
+
     groups = data.groupby(['TITLE', 'DATE'])['ACTL'].sum()  # groups the data
     # prints the standard deviation of the enrollment numbers to show how
     # widespread the data is
     actl_std = np.std(groups)
     print("The standard deviation of the # of enrolled students is: %s" % str(actl_std))
-    groups.plot.barh(x='TITLE', y='ACTL', title='%s Course Enrollments for %s in a %s day period' % (semester, name, days_back), legend=True, color=colors, figsize=(14, 5))    #figsize is the size of the window
-    plt.tight_layout()  # this keeps all of the data within the size of the window
-    plt.show()  # required to display pop up of graph
+
+    if actl_std < .5:
+        print("There hasn't been any significant change in student enrollment\n" + percent_detail)
+        return "There hasn't been any significant change in student enrollment\n" + percent_detail
+
+    elif actl_std < 1 and actl_std > .5:
+        print("There has been a small amount of change in student enrollment!\n" + percent_detail)
+        return "There has been a small amount of change in student enrollment!\n" + percent_detail
+
+    elif actl_std > 1:
+        print("There has been a large amount of change in student enrollment\n" + percent_detail)
+        return "There has been a large amount of change in student enrollment\n" + percent_detail
 
 
 if __name__ == '__main__':
     # starting menu
     print("Automatically loading the data...\n")
 
-
-    print("What would you like to do?")
+    print("I can send you a copy of this report to your email.")
+    # gathers email addresses to send data
+    recipients = input("Enter your email if you want a copy, if not hit Enter (separate multiple emails using commas):\n")
+    print("Now that we have that, what would you like to do?")
     print("Whichever option # you choose will result in a graph and CSV file")
     data_choice = input("""
         1. View data of a specific course
@@ -187,37 +230,39 @@ if __name__ == '__main__':
         3. Spring
     """)
     try:
+        # single course data
         if data_choice == "1":
             course_choice = input("What course did you have in mind?\n")
             if semester_choice == "1" or semester_choice == "Summer" or semester_choice == "summer":
                 days_back = input("How many days do you want do you want to view the data for? ")
-                course_data_comparison(src_folder, "Summer", course_choice, int(days_back))
+                course_data_comparison(src_folder, "Summer", course_choice, int(days_back), recipients)
                 print("\nYour csv file and graph have been created")
             elif semester_choice == "2" or semester_choice == "Fall" or semester_choice == "fall":
                 days_back = input("How many days do you want do you want to view the data for? ")
-                course_data_comparison(src_folder, "Fall", course_choice, int(days_back))
+                course_data_comparison(src_folder, "Fall", course_choice, int(days_back), recipients)
                 print("\nYour csv file and graph have been created")
             elif semester_choice == "3" or semester_choice == "Spring" or semester_choice == "spring":
                 days_back = input("How many days do you want do you want to view the data for? ")
-                course_data_comparison(src_folder, "Spring", course_choice, int(days_back))
+                course_data_comparison(src_folder, "Spring", course_choice, int(days_back), recipients)
                 print("\nYour csv file and graph have been created")
             else:
                 print("AwkwardError: Uhhhhhh, that wasn't even an option. Try again? I guess?")
                 pass
 
+        # multiple course comparison
         elif data_choice == "2":
             subject_choice = input("What subject did you have in mind?\n")
             if semester_choice == "1" or semester_choice == "Summer" or semester_choice == "summer":
                 days_back = input("How many days back do you want to compare the latest to? ")
-                subject_data_comparison(src_folder, "Summer", subject_choice, int(days_back))
+                subject_data_comparison(src_folder, "Summer", subject_choice, int(days_back), recipients)
                 print("\nYour csv file and graph have been created")
             elif semester_choice == "2" or semester_choice == "Fall" or semester_choice == "fall":
                 days_back = input("How many days back do you want to compare the latest to? ")
-                subject_data_comparison(src_folder, "Fall", subject_choice, int(days_back))
+                subject_data_comparison(src_folder, "Fall", subject_choice, int(days_back), recipients)
                 print("\nYour csv file and graph have been created")
             elif semester_choice == "3" or semester_choice == "Spring" or semester_choice == "spring":
                 days_back = input("How many days back do you want to compare the latest to? ")
-                subject_data_comparison(src_folder, "Spring", subject_choice, int(days_back))
+                subject_data_comparison(src_folder, "Spring", subject_choice, int(days_back), recipients)
                 print("\nYour csv file and graph have been created")
             else:
                 print("AwkwardError: Uhhhhhh, that wasn't even an option. Try again? I guess?")
